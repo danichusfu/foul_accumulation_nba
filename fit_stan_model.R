@@ -126,7 +126,7 @@ mles <-
 ##############################
 # Prep Data for Stan
 ##############################
-# do it for 18 so we can test on 19
+# do it for 17 and 18 so we can test on 19
 
 # data <-
 #   df_18 %>%
