@@ -1,0 +1,160 @@
+---
+title: "Goodness of Fit Test"
+author: "Dani Chu"
+date: "10/29/2019"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(tidyverse)
+
+guard_subset_13 <-
+  c(1718, # Paul Pierce
+    2548, # Wade
+    2440 # BARNES
+  )
+
+theme_set(theme_bw() +
+            theme(strip.background = element_rect(fill = "white")))
+
+source("read_foul_data.R")
+source("functions")
+```
+
+```{r, cache = T}
+df_13 <- read_foul_data(file_name = "online-data/events_2012-2013_pbp.csv")
+```
+
+# Goodness of Fit
+
+```{r}
+df_filtered <-
+  df_13
+  
+data <-
+  df_filtered %>% 
+  group_by(FOULER, FOUL_FROM) %>%
+  mutate(i = row_number(GAME_ID),
+         censored = if_else(TRANSITION_OBSERVED == 1, FALSE, TRUE)) %>%
+  select(FOULER, FOUL_FROM, i, X = PT_UNTIL_FOUL, censored)
+
+
+player_names <- 
+  df_13 %>%
+  count(FOULER, player_name) %>%
+  arrange(-n)
+
+data_mles <-
+  data %>%
+  ungroup() %>%
+  mutate(censored = as.numeric(censored)) %>%
+  select(FOULER, FOUL_FROM, X, censored) %>%
+  nest(data = - c(FOULER, FOUL_FROM)) %>%
+  left_join(player_names, by = "FOULER") %>%
+  mutate(mle_exponential = map_dbl(data, ~ sum(1 - .$censored)/sum(.$X))) %>%
+  filter(mle_exponential != 0) %>%
+  mutate(ll_exponential = map2_dbl(data, mle_exponential, ll_exponential),
+         mle_gamma = map(data, ~ fit_gamma_cens(.$censored, .$X))) %>%
+  unnest(cols = c(mle_gamma))
+
+data_mles %>%
+  filter(FOULER == 1718, FOUL_FROM == 0) %>%
+  mutate(surv_object = map(data, ~ (survival::Surv(time = .$X, event = 1 - .$censored) ~ 1) %>% survival::survfit()),
+         surv_data = map(surv_object, ~ tibble(time = .$time, surv = .$surv))) %>%
+  unnest(cols = surv_data) %>%
+  mutate(exp_val = 1 - pexp(time, mle_exponential),
+         gamma_val = 1 - pgamma(time, shape = shape, rate = rate)) %>%
+  ggplot() +
+  geom_line(aes(x = time/60, y = gamma_val, colour = "Gamma")) +
+  geom_step(aes(x = time/60, y = surv, colour =  "Kaplan-Meier")) +
+  scale_colour_manual(name = "", values = c("red", "black")) +
+  labs(x = "Time (Minutes)",
+       y = "Surival Probability") +
+  theme(text = element_text(size = 14))
+
+#ggsave("pierce_plot_2012_2013.png", height = 5, width = 7, units = "in")
+```
+
+```{r}
+descript_data <- 
+  data_mles %>%
+  filter(FOULER == 1718, FOUL_FROM == 0) %>%
+  mutate(num_censored = map_dbl(data, ~ sum(.$censored == 1)),
+         n = map_dbl(data, nrow)) %>%
+  select(shape, rate, num_censored, n)
+```
+
+# About the Plot
+
+This plot is for Paul Pierce's time to first foul in the 2012-2013 NBA season. The gamma distribution has shape parameter 1.55. It is greater than 1 indicating an increasing failiure rate. The rate parameter is 0.00220 which indicates an average time to foul of 455 seconds (7.5 minutes). We have 77 observations and 3 of them are censored.
+
+
+```{r}
+
+p_value_plot <- 
+  data_mles %>%
+  mutate(n = map(data, nrow)) %>%
+  #filter(FOULER == 1718, FOUL_FROM == 0)  %>%
+  select(FOULER, FOUL_FROM, player_name, n, mle_exponential, ll_exponential, ll_gamma, shape, rate) %>%
+  mutate(test_stat = - 2 * (ll_gamma - ll_exponential ),
+         p_value =  1 - pchisq(test_stat, df = 1)) %>%
+  filter(n > 30) %>%
+  select(p_value) %>%
+  mutate(p_value_g = (p_value %/% 0.05) / 20) %>%
+  count(p_value_g) %>%
+  mutate(prop = n/sum(n)) %>%
+  ggplot(aes(x = p_value_g, y = prop)) +
+  geom_col()
+```
+
+# Goodness of Fit Tests
+
+Using a likelihood ratio test we test the null hypothesis that the scale parameter is equal to 1 for the gamma distribution. We perform the test for player and foul level combinations that have more then 30 occurences in the 2012-2013 season. There are 1,010 of these combinations from 376 unique players. In 20 percent of tests we reject the null hypothesis. 
+
+```{r}
+p_val_table <- 
+  data_mles %>%
+  mutate(n = map(data, nrow)) %>%
+  select(FOULER, FOUL_FROM, player_name, n, mle_exponential, ll_exponential, ll_gamma, shape, rate) %>%
+  mutate(test_stat = - 2 * (ll_gamma - ll_exponential ),
+         p_value =  1 - pchisq(test_stat, df = 1)) %>%
+  filter(n > 30) %>%
+  mutate(p_value_g = (p_value %/% 0.05) / 20) %>%
+  count(p_value < 0.05) %>%
+  mutate(p = n/sum(n) * 100)
+
+fouler <- 
+  data_mles %>%
+  mutate(n = map(data, nrow)) %>%
+  select(FOULER, FOUL_FROM, player_name, n, mle_exponential, ll_exponential, ll_gamma, shape, rate) %>%
+  mutate(test_stat = - 2 * (ll_gamma - ll_exponential ),
+         p_value =  1 - pchisq(test_stat, df = 1)) %>%
+  filter(n > 30) %>% 
+  count(FOULER)
+
+foul_froms <-
+  data_mles %>%
+  mutate(n = map(data, nrow)) %>%
+  select(FOULER, FOUL_FROM, player_name, n, mle_exponential, ll_exponential, ll_gamma, shape, rate) %>%
+  mutate(test_stat = - 2 * (ll_gamma - ll_exponential ),
+         p_value =  1 - pchisq(test_stat, df = 1)) %>%
+  filter(n > 30) %>% 
+  count(FOUL_FROM)
+
+
+data_mles %>%
+  mutate(n = map(data, nrow)) %>%
+  select(FOULER, FOUL_FROM, player_name, n, mle_exponential, ll_exponential, ll_gamma, shape, rate) %>%
+  mutate(test_stat = - 2 * (ll_gamma - ll_exponential ),
+         p_value =  1 - pchisq(test_stat, df = 1)) %>%
+  filter(n > 30) %>%
+  count(shape > 1)
+  
+```
+

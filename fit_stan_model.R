@@ -34,6 +34,9 @@ id_position_map <-
 ##############################
 # Read in Foul Data
 ##############################
+# get data from https://eightthirtyfour.com/data
+# save in folder online-data
+
 df_14 <- read_foul_data(file_name = "online-data/events_2013-2014_pbp.csv")
 df_15 <- read_foul_data(file_name = "online-data/events_2014-2015_pbp.csv")
 df_16 <- read_foul_data(file_name = "online-data/events_2015-2016_pbp.csv")
